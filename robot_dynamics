@@ -1,0 +1,83 @@
+function [q_ddot, F_ext] = robot_dynamics(tau1, tau2, q1, q2, dq1, dq2)
+% 显式定义所有参数
+l1 = 1.0; l2 = 1.0;      % 长度 (m)
+m1 = 1.0; m2 = 1.0;      % 质量 (kg)
+lc1 = 0.5; lc2 = 0.5;    % 质心位置 (m)
+I1 = 0.1; I2 = 0.1;      % 转动惯量
+g = 9.81;                % 重力加速度
+
+% ====== 固定大小输出声明 ======
+q_ddot = zeros(2, 1);  % 固定2×1向量
+F_ext = zeros(2, 1);   % 固定2×1向量
+
+% ====== 惯性矩阵 ======
+M11 = m1*lc1^2 + m2*(l1^2 + lc2^2 + 2*l1*lc2*cos(q2)) + I1 + I2;
+M12 = m2*(lc2^2 + l1*lc2*cos(q2)) + I2;
+M21 = M12;
+M22 = m2*lc2^2 + I2;
+M = [M11, M12; M21, M22];
+
+% ====== 科里奥利矩阵 ======
+c11 = -m2*l1*lc2*sin(q2)*dq2;
+c12 = -m2*l1*lc2*sin(q2)*(dq1 + dq2);
+c21 = m2*l1*lc2*sin(q2)*dq1;
+c22 = 0;
+C = [c11, c12; c21, c22];
+
+% ====== 重力项 ======
+g1 = (m1*lc1 + m2*l1)*g*cos(q1) + m2*lc2*g*cos(q1+q2);
+g2 = m2*lc2*g*cos(q1+q2);
+G = [g1; g2];
+
+% ====== 环境接触力 ======
+% 内联正运动学
+[x, ~] = local_forward_kinematics(q1, q2, l1, l2);
+F_ext = local_environment_model(x);
+
+% ====== 动力学方程 ======
+tau = [tau1; tau2];
+q_dot_vec = [dq1; dq2];
+q_ddot = M \ (tau - C*q_dot_vec - G);
+
+% ====== 内联子函数 ======
+function [x, J] = local_forward_kinematics(q1, q2, l1, l2)
+    x = zeros(2, 1);
+    J = zeros(2, 2);
+    % 末端位置
+    x(1) = l1*cos(q1) + l2*cos(q1+q2);
+    x(2) = l1*sin(q1) + l2*sin(q1+q2);
+    
+    % 雅可比矩阵
+    J(1,1) = -l1*sin(q1) - l2*sin(q1+q2);
+    J(1,2) = -l2*sin(q1+q2);
+    J(2,1) = l1*cos(q1) + l2*cos(q1+q2);
+    J(2,2) = l2*cos(q1+q2);
+end
+
+function F_ext = local_environment_model(x)
+    F_ext = zeros(2, 1);
+    surface_y = 0;    % 接触面位置
+    K_env = 1500;     % 环境刚度
+    D_env = 50;       % 环境阻尼
+    mu_k = 0.2;       % 摩擦系数
+    
+    persistent prev_y;
+    if isempty(prev_y)
+        prev_y = x(2);
+    end
+    
+    penetration = max(0, surface_y - x(2));
+    
+    if penetration > 0
+        dy_dt = (x(2) - prev_y) / 0.001;
+        prev_y = x(2);
+        F_y = K_env * penetration + D_env * (-dy_dt);
+        F_x = -mu_k * F_y * sign(x(1));
+        F_ext(1) = F_x;
+        F_ext(2) = F_y;
+    else
+        F_ext(1) = 0;
+        F_ext(2) = 0;
+    end
+end
+end
