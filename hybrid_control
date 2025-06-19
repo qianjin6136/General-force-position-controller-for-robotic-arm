@@ -1,0 +1,101 @@
+function tau = hybrid_control(input_vec, q, q_dot, F_ext)
+% 输入: 
+%   input_vec = [x_d; F_d] (4×1)
+%   q = [q1; q2] (2×1)
+%   q_dot = [dq1; dq2] (2×1)
+%   F_ext = [F_ext_x; F_ext_y] (2×1)
+% 输出: 
+%   tau = [tau1; tau2] (2×1)
+
+% ====== 显式定义所有参数 ======
+l1 = 1.0;  % 连杆1长度 (m)
+l2 = 1.0;  % 连杆2长度 (m)
+m1 = 1.0;  % 连杆1质量 (kg)
+m2 = 1.0;  % 连杆2质量 (kg)
+lc1 = 0.5; % 连杆1质心位置 (m)
+lc2 = 0.5; % 连杆2质心位置 (m)
+g = 9.81;  % 重力加速度 (m/s²)
+
+% 控制器增益
+tau = zeros(2, 1);        % 输出端口初始化
+x = zeros(2, 1);          % 位置向量
+x_dot = zeros(2, 1);      % 速度向量
+e_x = zeros(2, 1);        % 位置误差
+e_v = zeros(2, 1);        % 速度误差
+
+% ====== 控制器增益 ======
+% 使用显式2×2矩阵代替diag()
+Kp = [200, 0; 
+       0, 0];   % 位置增益矩阵
+Kd = [20, 0;
+       0, 0];    % 速度阻尼矩阵
+Kfp = 0.8;       % 力比例增益
+Kfi = 5.0;       % 力积分增益
+
+% ====== 输入解析 ======
+x_d = input_vec(1:2); 
+F_d = input_vec(3:4); 
+
+% ====== 运动学计算 ======
+[x, J] = forward_kinematics(q(1), q(2), l1, l2);
+x_dot = J * q_dot;
+
+% ====== 投影矩阵 ======
+n = [0; 1]; 
+P_f = n * n';
+P_p = eye(2) - P_f;
+
+% ====== 位置控制 ======
+e_x = x_d - x;
+e_v = -x_dot; 
+F_p = P_p * (Kp * e_x + Kd * e_v);
+
+% ====== 力控制 ======
+persistent F_integral;
+if isempty(F_integral)
+    F_integral = [0; 0];  % 确保首次调用时初始化
+end
+
+e_F = F_d - F_ext;
+F_integral = F_integral + e_F * 0.001;  % dt=0.001s
+F_f = P_f * (Kfp * e_F + Kfi * F_integral);
+
+% ====== 动力学补偿 ======
+% 内联科里奥利/重力计算
+q1 = q(1); q2 = q(2);
+dq1 = q_dot(1); dq2 = q_dot(2);
+
+% 科里奥利矩阵
+c11 = -m2*l1*lc2*sin(q2)*dq2;
+c12 = -m2*l1*lc2*sin(q2)*(dq1 + dq2);
+c21 = m2*l1*lc2*sin(q2)*dq1;
+c22 = 0;
+C = [c11, c12; c21, c22];
+
+% 重力项
+g1 = (m1*lc1 + m2*l1)*g*cos(q1) + m2*lc2*g*cos(q1+q2);
+g2 = m2*lc2*g*cos(q1+q2);
+G = [g1; g2];
+
+% 任务空间转换
+J_inv = pinv(J);
+C_x = J_inv' * C * J_inv;
+G_x = J_inv' * G;
+
+% ====== 总控制力 ======
+F_ctrl = F_p + F_f + C_x * x_dot + G_x;
+tau = J' * F_ctrl;
+
+% ====== 内联正运动学子函数 ======
+function [x, J] = forward_kinematics(q1, q2, l1, l2)
+    x = [l1*cos(q1) + l2*cos(q1+q2);
+         l1*sin(q1) + l2*sin(q1+q2)];
+    
+    J11 = -l1*sin(q1) - l2*sin(q1+q2);
+    J12 = -l2*sin(q1+q2);
+    J21 = l1*cos(q1) + l2*cos(q1+q2);
+    J22 = l2*cos(q1+q2);
+    J = [J11, J12;
+         J21, J22];
+end
+end
